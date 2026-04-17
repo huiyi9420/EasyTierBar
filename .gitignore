@@ -1,18 +1,17 @@
-# EasyTier prebuilt binaries
+# EasyTier prebuilt binaries (local dev only)
 easytier-cli
 easytier-core
 easytier-web
 easytier-web-embed
 
 # Build artifacts
+build/
 EasyTierBar/EasyTierBar
 EasyTierBar.app/
 
 # macOS
 .DS_Store
 
-# GSD visual companion
+# GSD / Spec workflow
 .superpowers/
-
-# Spec workflow
 .spec-workflow/
