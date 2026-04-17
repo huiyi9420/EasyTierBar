@@ -96,7 +96,9 @@ jobs:
       - name: Generate app icon
         if: steps.check.outputs.skip == 'false'
         run: |
-          python3 -m pip install Pillow
+          python3 -m venv /tmp/icongen
+          source /tmp/icongen/bin/activate
+          pip install Pillow
           python3 scripts/generate_icon.py
           ICONSET="EasyTierBar/AppIcon.iconset"
           SRC="$ICONSET/icon_512x512@2x.png"
