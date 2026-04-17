@@ -12,6 +12,10 @@ EasyTierBar.app/
 # macOS
 .DS_Store
 
+# Generated icon artifacts
+*.icns
+*.iconset/
+
 # GSD / Spec workflow
 .superpowers/
 .spec-workflow/

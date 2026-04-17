@@ -1,6 +1,13 @@
 name: Build EasyTierBar
 
 on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - "*.md"
+      - ".planning/**"
+      - ".gitignore"
+      - "LICENSE"
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
@@ -45,14 +52,24 @@ jobs:
             exit 0
           fi
 
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+          # On push: delete existing release to force rebuild
+          if [ "${{ github.event_name }}" = "push" ]; then
+            gh release delete "easytierbar-${TAG}" --yes 2>/dev/null || true
+            git push origin --delete "easytierbar-${TAG}" 2>/dev/null || true
+            echo "Push detected — rebuilding for ${TAG}"
+            exit 0
+          fi
+
+          # On schedule/dispatch: skip if release exists
           if gh release view "easytierbar-${TAG}" >/dev/null 2>&1; then
             echo "Release for ${TAG} already exists — skipping"
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "skip=false" >> $GITHUB_OUTPUT
           echo "Building for EasyTier ${TAG}"
 
       - name: Download EasyTier binaries
@@ -76,6 +93,20 @@ jobs:
           chmod +x easytier-cli easytier-core
           ls -la easytier-*
 
+      - name: Generate app icon
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          pip install Pillow
+          python3 scripts/generate_icon.py
+          ICONSET="EasyTierBar/AppIcon.iconset"
+          SRC="$ICONSET/icon_512x512@2x.png"
+          for s in 16 32 128 256 512; do
+            sips -z $s $s "$SRC" --out "$ICONSET/icon_${s}x${s}.png" -s format png >/dev/null 2>&1
+            d=$((s * 2))
+            sips -z $d $d "$SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" -s format png >/dev/null 2>&1
+          done
+          iconutil -c icns "$ICONSET" -o EasyTierBar/AppIcon.icns
+
       - name: Build EasyTierBar
         if: steps.check.outputs.skip == 'false'
         run: |
@@ -94,6 +125,7 @@ jobs:
           mkdir -p "${APP}/Contents/Resources"
           mv build_output "${APP}/Contents/MacOS/EasyTierBar"
           cp EasyTierBar/Info.plist "${APP}/Contents/"
+          cp EasyTierBar/AppIcon.icns "${APP}/Contents/Resources/"
           mv easytier-cli easytier-core "${APP}/Contents/Resources/"
           chmod +x "${APP}/Contents/Resources/"*
           echo "App bundle contents:"

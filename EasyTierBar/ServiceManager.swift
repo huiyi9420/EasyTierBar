@@ -4,128 +4,113 @@ class ServiceManager {
     static let shared = ServiceManager()
 
     let cliPath: String?
-    var isRunning = false
-    var isInstalled = true
+    private(set) var isRunning = false
     var onStatusChanged: ((Bool) -> Void)?
+
+    private let installedConfigKey = "ETB_installedConfigUrl"
 
     private init() {
         cliPath = Bundle.main.path(forResource: "easytier-cli", ofType: nil)
-        if cliPath == nil {
-            let devPath = (Bundle.main.bundlePath as NSString).deletingLastPathComponent + "/easytier-cli"
-            if FileManager.default.fileExists(atPath: devPath) {
-                // devPath used as fallback — only in development mode
-            }
-        }
     }
 
-    var isReady: Bool {
-        cliPath != nil
-    }
+    var isReady: Bool { cliPath != nil }
 
     // MARK: - Status Check (Async)
 
     func checkStatus(completion: @escaping (Bool) -> Void = { _ in }) {
         guard let path = cliPath else {
-            isRunning = false
-            completion(false)
-            onStatusChanged?(false)
+            applyStatus(false, completion: completion)
             return
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = ["service", "status"]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            let output = self?.runCli(path: path, args: ["service", "status"]) ?? ""
+            let running = output.lowercased().contains("running")
 
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let running = process.terminationStatus == 0
-
-                DispatchQueue.main.async {
-                    self?.isRunning = running
-                    self?.isInstalled = true
-                    completion(running)
-                    self?.onStatusChanged?(running)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self?.isRunning = false
-                    self?.isInstalled = true
-                    completion(false)
-                    self?.onStatusChanged?(false)
-                }
+            DispatchQueue.main.async {
+                self?.applyStatus(running, completion: completion)
             }
         }
     }
 
-    // MARK: - Service Control (Sync)
+    // MARK: - Start (handles install + sudo fallback)
 
-    func startService(configUrl: String) -> Bool {
-        guard let path = cliPath else { return false }
+    func startService(configUrl: String, completion: @escaping (Bool) -> Void = { _ in }) {
+        guard let path = cliPath else { completion(false); return }
 
-        if !isInstalled {
-            if !installService(configUrl: configUrl) {
-                return false
+        // Install check on main thread (may show auth dialog)
+        if needsInstall(configUrl: configUrl) {
+            guard installService(configUrl: configUrl) else {
+                completion(false)
+                return
             }
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["service", "start"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        // Try start without sudo first
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let (exitCode, _) = self?.runCliWithExitCode(path: path, args: ["service", "start"]) ?? (-1, "")
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let success = process.terminationStatus == 0
-            if success {
-                isRunning = true
-                onStatusChanged?(true)
+            if exitCode == 0 {
+                DispatchQueue.main.async {
+                    self?.applyStatus(true, completion: completion)
+                }
+                return
             }
-            return success
-        } catch {
-            return false
+
+            // Fallback: system-level service needs sudo
+            DispatchQueue.main.async {
+                let ok = self?.runAppleScriptSudo(command: "\"\(path)\" service start") ?? false
+                self?.applyStatus(ok, completion: completion)
+            }
         }
     }
 
-    func stopService() -> Bool {
-        guard let path = cliPath else { return false }
+    // MARK: - Stop (with sudo fallback)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["service", "stop"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+    func stopService(completion: @escaping (Bool) -> Void = { _ in }) {
+        guard let path = cliPath else { completion(false); return }
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let success = process.terminationStatus == 0
-            if success {
-                isRunning = false
-                onStatusChanged?(false)
+        // Try stop without sudo first
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let (exitCode, _) = self?.runCliWithExitCode(path: path, args: ["service", "stop"]) ?? (-1, "")
+
+            if exitCode == 0 {
+                DispatchQueue.main.async {
+                    self?.applyStatus(false, completion: completion)
+                }
+                return
             }
-            return success
-        } catch {
-            return false
+
+            // Fallback: system-level service needs sudo
+            DispatchQueue.main.async {
+                let ok = self?.runAppleScriptSudo(command: "\"\(path)\" service stop") ?? false
+                self?.applyStatus(!ok, completion: completion)
+            }
         }
     }
 
     // MARK: - Peer List (Async)
 
     struct Peer: Codable {
-        let hostname: String
-        let ipv4: String
-        let cost: String
-        let lat_ms: String
-        let loss_rate: String
-        let rx_bytes: String
-        let tx_bytes: String
-        let version: String
+        let hostname: String?
+        let ipv4: String?
+        let cost: String?
+        let lat_ms: String?
+        let loss_rate: String?
+        let rx_bytes: String?
+        let tx_bytes: String?
+        let version: String?
+
+        var displayTitle: String {
+            var parts = [String]()
+            if let h = hostname, !h.isEmpty { parts.append(h) }
+            if let ip = ipv4, !ip.isEmpty { parts.append(ip) }
+            if let c = cost, !c.isEmpty { parts.append(c) }
+            if let l = lat_ms, !l.isEmpty { parts.append(l + "ms") }
+            if let lr = loss_rate, !lr.isEmpty { parts.append(lr) }
+            if let v = version, !v.isEmpty { parts.append("v" + v) }
+            return parts.isEmpty ? "unknown" : parts.joined(separator: " \u{2022} ")
+        }
     }
 
     func fetchPeerList(completion: @escaping ([Peer]?) -> Void) {
@@ -145,6 +130,12 @@ class ServiceManager {
             do {
                 try process.run()
                 process.waitUntilExit()
+
+                guard process.terminationStatus == 0 else {
+                    DispatchQueue.main.async { completion(nil) }
+                    return
+                }
+
                 let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
                 let peers = try? JSONDecoder().decode([Peer].self, from: data)
                 DispatchQueue.main.async {
@@ -158,24 +149,77 @@ class ServiceManager {
         }
     }
 
-    // MARK: - Install (AppleScript sudo)
+    // MARK: - Private Helpers
+
+    private func applyStatus(_ running: Bool, completion: (Bool) -> Void) {
+        isRunning = running
+        completion(running)
+        onStatusChanged?(running)
+    }
+
+    private func needsInstall(configUrl: String) -> Bool {
+        let saved = UserDefaults.standard.string(forKey: installedConfigKey)
+        return saved != configUrl
+    }
 
     @discardableResult
-    func installService(configUrl: String) -> Bool {
+    private func installService(configUrl: String) -> Bool {
         guard let path = cliPath else { return false }
 
-        let command = "\"\(path)\" service install --disable-autostart true -w \"\(configUrl)\""
-        let script = "do shell script \"\(command)\" with administrator privileges"
+        // Uninstall existing (try without sudo first)
+        let (uninstallExit, _) = runCliWithExitCode(path: path, args: ["service", "uninstall"])
+        if uninstallExit != 0 {
+            _ = runAppleScriptSudo(command: "\"\(path)\" service uninstall")
+        }
 
+        // Try user-level install first (no sudo needed for start/stop)
+        let (installExit, _) = runCliWithExitCode(path: path, args: [
+            "service", "install", "--disable-autostart", "true", "-w", configUrl
+        ])
+
+        if installExit == 0 {
+            UserDefaults.standard.set(configUrl, forKey: installedConfigKey)
+            return true
+        }
+
+        // Fallback: system-level install with sudo
+        let installCmd = "\"\(path)\" service install --disable-autostart true -w \"\(configUrl)\""
+        guard runAppleScriptSudo(command: installCmd) else { return false }
+
+        UserDefaults.standard.set(configUrl, forKey: installedConfigKey)
+        return true
+    }
+
+    @discardableResult
+    private func runAppleScriptSudo(command: String) -> Bool {
+        let script = "do shell script \"\(command)\" with administrator privileges"
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?
         appleScript?.executeAndReturnError(&error)
+        return error == nil
+    }
 
-        if let _ = error {
-            return false
+    private func runCli(path: String, args: [String]) -> String {
+        let (_, output) = runCliWithExitCode(path: path, args: args)
+        return output
+    }
+
+    private func runCliWithExitCode(path: String, args: [String]) -> (Int32, String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            return (process.terminationStatus, output)
+        } catch {
+            return (-1, "")
         }
-
-        isInstalled = true
-        return true
     }
 }

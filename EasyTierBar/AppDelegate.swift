@@ -128,8 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if let peers = peers, !peers.isEmpty {
                 for peer in peers {
-                    let title = "\(peer.hostname) • \(peer.ipv4) • \(peer.cost) • \(peer.lat_ms)ms • \(peer.loss_rate) • \(peer.rx_bytes)/\(peer.tx_bytes) • \(peer.version)"
-                    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    let item = NSMenuItem(title: peer.displayTitle, action: nil, keyEquivalent: "")
                     self.peerMenu.addItem(item)
                 }
             } else {
@@ -147,13 +146,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let config = ConfigManager.shared.selectedConfig else { return }
 
         if ServiceManager.shared.isRunning {
-            _ = ServiceManager.shared.stopService()
+            setToggleState(enabled: false, title: "正在停止...")
+            ServiceManager.shared.stopService { [weak self] success in
+                guard let self = self else { return }
+                self.setToggleState(enabled: true)
+                if !success {
+                    self.showAlert(title: "操作失败", message: "无法停止 EasyTier 服务。")
+                }
+                self.updateUI()
+            }
         } else {
-            if !ServiceManager.shared.startService(configUrl: config.url) {
-                showAlert(title: "操作失败", message: "无法启动 EasyTier 服务。")
+            setToggleState(enabled: false, title: "正在启动...")
+            ServiceManager.shared.startService(configUrl: config.url) { [weak self] success in
+                guard let self = self else { return }
+                self.setToggleState(enabled: true)
+                if !success {
+                    self.showAlert(title: "操作失败", message: "无法启动 EasyTier 服务。")
+                }
+                self.updateUI()
             }
         }
-        updateUI()
+    }
+
+    private func setToggleState(enabled: Bool, title: String? = nil) {
+        guard let toggleItem = mainMenu.items.first else { return }
+        toggleItem.isEnabled = enabled
+        if let title = title { toggleItem.title = title }
     }
 
     @objc func selectConfig(_ sender: NSMenuItem) {
@@ -204,7 +222,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            ConfigManager.shared.addConfig(name: name, url: url)
+            _ = ConfigManager.shared.addConfig(name: name, url: url)
             updateUI()
         } else if isFirstLaunch {
             NSApplication.shared.terminate(nil)
@@ -238,7 +256,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func quit() {
         if ServiceManager.shared.isRunning {
-            _ = ServiceManager.shared.stopService()
+            ServiceManager.shared.stopService { _ in }
         }
         NSApplication.shared.terminate(nil)
     }
