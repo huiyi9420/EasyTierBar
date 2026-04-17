@@ -30,9 +30,13 @@ jobs:
           if [ -n "${{ inputs.easytier_tag }}" ]; then
             TAG="${{ inputs.easytier_tag }}"
           else
-            TAG=$(curl -sH "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" \
-              | jq -r '.tag_name // empty')
+            RESPONSE=$(curl -sS \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/EasyTier/EasyTier/releases/latest")
+            echo "API response length: $(echo "$RESPONSE" | wc -c)"
+            TAG=$(echo "$RESPONSE" | jq -r '.tag_name // empty')
+            echo "Detected tag: ${TAG:-none}"
           fi
 
           if [ -z "$TAG" ]; then
@@ -55,8 +59,10 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: |
           TAG="${{ steps.check.outputs.tag }}"
-          URL=$(curl -sH "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${TAG}" \
+          URL=$(curl -sS \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${TAG}" \
             | jq -r '.assets[] | select(.name | test("macos-aarch64")) | .browser_download_url')
           if [ -z "$URL" ]; then
             echo "ERROR: No macOS aarch64 asset found for ${TAG}"
