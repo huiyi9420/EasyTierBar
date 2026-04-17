@@ -57,13 +57,14 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: |
           TAG="${{ steps.check.outputs.tag }}"
-          URL="https://github.com/EasyTier/EasyTier/releases/download/${TAG}/easytier-aarch64-apple-darwin.zip"
+          VERSION="${TAG#v}"
+          URL="https://github.com/EasyTier/EasyTier/releases/download/${TAG}/easytier-macos-aarch64-${VERSION}.zip"
           echo "Downloading ${URL}"
           curl -L -o easytier.zip "${URL}"
-          unzip easytier.zip
+          unzip easytier.zip -d easytier-extract
           # Find easytier-cli and easytier-core in extracted directory
-          find . -name "easytier-cli" -exec mv {} . \;
-          find . -name "easytier-core" -exec mv {} . \;
+          find easytier-extract -name "easytier-cli" -exec mv {} . \;
+          find easytier-extract -name "easytier-core" -exec mv {} . \;
           chmod +x easytier-cli easytier-core
           ls -la easytier-*
 
