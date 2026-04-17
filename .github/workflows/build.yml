@@ -30,18 +30,16 @@ jobs:
           if [ -n "${{ inputs.easytier_tag }}" ]; then
             TAG="${{ inputs.easytier_tag }}"
           else
-            TAG=$(curl -sf https://api.github.com/repos/EasyTier/EasyTier/releases/latest | jq -r '.tag_name')
+            TAG=$(gh api repos/EasyTier/EasyTier/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
           fi
 
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+          if [ -z "$TAG" ]; then
             echo "No EasyTier release found"
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Check if we already have a release for this tag
-          EXISTING=$(gh release view "easytierbar-${TAG}" 2>/dev/null || true)
-          if [ -n "$EXISTING" ]; then
+          if gh release view "easytierbar-${TAG}" >/dev/null 2>&1; then
             echo "Release for ${TAG} already exists — skipping"
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
@@ -50,16 +48,12 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
           echo "Building for EasyTier ${TAG}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download EasyTier binaries
         if: steps.check.outputs.skip == 'false'
         run: |
           TAG="${{ steps.check.outputs.tag }}"
-          # Find the exact macOS aarch64 asset URL from the release
-          URL=$(curl -sf "https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${TAG}" | \
-            jq -r '.assets[] | select(.name | test("macos-aarch64")) | .browser_download_url')
+          URL=$(gh api "repos/EasyTier/EasyTier/releases/tags/${TAG}" --jq '.assets[] | select(.name | test("macos-aarch64")) | .browser_download_url')
           if [ -z "$URL" ]; then
             echo "ERROR: No macOS aarch64 asset found for ${TAG}"
             exit 1
