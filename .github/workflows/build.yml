@@ -30,7 +30,9 @@ jobs:
           if [ -n "${{ inputs.easytier_tag }}" ]; then
             TAG="${{ inputs.easytier_tag }}"
           else
-            TAG=$(gh api repos/EasyTier/EasyTier/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+            TAG=$(curl -sH "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/EasyTier/EasyTier/releases/latest" \
+              | jq -r '.tag_name // empty')
           fi
 
           if [ -z "$TAG" ]; then
@@ -53,7 +55,9 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: |
           TAG="${{ steps.check.outputs.tag }}"
-          URL=$(gh api "repos/EasyTier/EasyTier/releases/tags/${TAG}" --jq '.assets[] | select(.name | test("macos-aarch64")) | .browser_download_url')
+          URL=$(curl -sH "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${TAG}" \
+            | jq -r '.assets[] | select(.name | test("macos-aarch64")) | .browser_download_url')
           if [ -z "$URL" ]; then
             echo "ERROR: No macOS aarch64 asset found for ${TAG}"
             exit 1
