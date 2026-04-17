@@ -115,6 +115,49 @@ class ServiceManager {
         }
     }
 
+    // MARK: - Peer List (Async)
+
+    struct Peer: Codable {
+        let hostname: String
+        let ipv4: String
+        let cost: String
+        let lat_ms: String
+        let loss_rate: String
+        let rx_bytes: String
+        let tx_bytes: String
+        let version: String
+    }
+
+    func fetchPeerList(completion: @escaping ([Peer]?) -> Void) {
+        guard let path = cliPath else {
+            completion(nil)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = ["-o", "json", "peer", "list"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
+                let peers = try? JSONDecoder().decode([Peer].self, from: data)
+                DispatchQueue.main.async {
+                    completion(peers)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
+            }
+        }
+    }
+
     // MARK: - Install (AppleScript sudo)
 
     @discardableResult

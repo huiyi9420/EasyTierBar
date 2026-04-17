@@ -4,6 +4,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let mainMenu = NSMenu()
     let configMenu = NSMenu()
+    let peerMenu = NSMenu()
 
     // MARK: - Lifecycle
 
@@ -38,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             showAddConfigDialog(isFirstLaunch: true)
         } else {
             ServiceManager.shared.checkStatus()
+            updatePeerList()
         }
     }
 
@@ -51,6 +53,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let configItem = NSMenuItem(title: "网络配置", action: nil, keyEquivalent: "")
         configItem.submenu = configMenu
         mainMenu.addItem(configItem)
+
+        let peersItem = NSMenuItem(title: "已连接节点", action: nil, keyEquivalent: "")
+        peersItem.submenu = peerMenu
+        mainMenu.addItem(peersItem)
 
         mainMenu.addItem(NSMenuItem.separator())
 
@@ -112,6 +118,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuWillOpen() {
         ServiceManager.shared.checkStatus()
+        updatePeerList()
+    }
+
+    private func updatePeerList() {
+        ServiceManager.shared.fetchPeerList { [weak self] peers in
+            guard let self = self else { return }
+            self.peerMenu.removeAllItems()
+
+            if let peers = peers, !peers.isEmpty {
+                for peer in peers {
+                    let title = "\(peer.hostname) • \(peer.ipv4) • \(peer.cost) • \(peer.lat_ms)ms • \(peer.loss_rate) • \(peer.rx_bytes)/\(peer.tx_bytes) • \(peer.version)"
+                    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    self.peerMenu.addItem(item)
+                }
+            } else {
+                let title = peers == nil ? "(获取节点列表失败)" : "(无已连接节点)"
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                self.peerMenu.addItem(item)
+            }
+        }
     }
 
     // MARK: - Actions
