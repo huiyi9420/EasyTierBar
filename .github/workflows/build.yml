@@ -57,12 +57,16 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: |
           TAG="${{ steps.check.outputs.tag }}"
-          VERSION="${TAG#v}"
-          URL="https://github.com/EasyTier/EasyTier/releases/download/${TAG}/easytier-macos-aarch64-${VERSION}.zip"
+          # Find the exact macOS aarch64 asset URL from the release
+          URL=$(curl -sf "https://api.github.com/repos/EasyTier/EasyTier/releases/tags/${TAG}" | \
+            jq -r '.assets[] | select(.name | test("macos-aarch64")) | .browser_download_url')
+          if [ -z "$URL" ]; then
+            echo "ERROR: No macOS aarch64 asset found for ${TAG}"
+            exit 1
+          fi
           echo "Downloading ${URL}"
           curl -L -o easytier.zip "${URL}"
           unzip easytier.zip -d easytier-extract
-          # Find easytier-cli and easytier-core in extracted directory
           find easytier-extract -name "easytier-cli" -exec mv {} . \;
           find easytier-extract -name "easytier-core" -exec mv {} . \;
           chmod +x easytier-cli easytier-core
