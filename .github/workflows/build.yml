@@ -79,7 +79,7 @@ jobs:
       - name: Build EasyTierBar
         if: steps.check.outputs.skip == 'false'
         run: |
-          swiftc -o EasyTierBar \
+          swiftc -o build_output \
             EasyTierBar/main.swift \
             EasyTierBar/ConfigManager.swift \
             EasyTierBar/ServiceManager.swift \
@@ -92,7 +92,7 @@ jobs:
           APP="EasyTierBar.app"
           mkdir -p "${APP}/Contents/MacOS"
           mkdir -p "${APP}/Contents/Resources"
-          mv EasyTierBar "${APP}/Contents/MacOS/"
+          mv build_output "${APP}/Contents/MacOS/EasyTierBar"
           cp EasyTierBar/Info.plist "${APP}/Contents/"
           mv easytier-cli easytier-core "${APP}/Contents/Resources/"
           chmod +x "${APP}/Contents/Resources/"*
