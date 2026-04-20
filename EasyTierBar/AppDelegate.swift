@@ -18,6 +18,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Fix Bug 5: remove quarantine attributes from downloaded binaries
+        removeQuarantineIfNeeded()
+
         buildMenu()
         updateUI()
 
@@ -122,6 +125,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updatePeerList() {
+        peerMenu.removeAllItems()
+
+        if !ServiceManager.shared.isRunning {
+            let item = NSMenuItem(title: "(服务未启动)", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            peerMenu.addItem(item)
+            return
+        }
+
         ServiceManager.shared.fetchPeerList { [weak self] peers in
             guard let self = self else { return }
             self.peerMenu.removeAllItems()
@@ -151,7 +163,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self = self else { return }
                 self.setToggleState(enabled: true)
                 if !success {
-                    self.showAlert(title: "操作失败", message: "无法停止 EasyTier 服务。")
+                    let err = ServiceManager.shared.lastError ?? "无法停止 EasyTier 服务。"
+                    self.showAlert(title: "操作失败", message: err)
                 }
                 self.updateUI()
             }
@@ -161,7 +174,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self = self else { return }
                 self.setToggleState(enabled: true)
                 if !success {
-                    self.showAlert(title: "操作失败", message: "无法启动 EasyTier 服务。")
+                    let err = ServiceManager.shared.lastError ?? "无法启动 EasyTier 服务。"
+                    self.showAlert(title: "操作失败", message: err)
                 }
                 self.updateUI()
             }
@@ -268,5 +282,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = title
         alert.informativeText = message
         alert.runModal()
+    }
+
+    /// Remove macOS quarantine (com.apple.quarantine) from bundled binaries.
+    /// Downloaded zip archives cause Gatekeeper to block execution.
+    private func removeQuarantineIfNeeded() {
+        guard let resourcePath = Bundle.main.resourcePath else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        process.arguments = ["-cr", resourcePath]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
     }
 }

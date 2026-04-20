@@ -16,6 +16,13 @@ EasyTierBar.app/
 *.icns
 *.iconset/
 
+# Dev planning (internal, not for contributors)
+.planning/
+docs/superpowers/
+
 # GSD / Spec workflow
 .superpowers/
 .spec-workflow/
+
+# gstack local data
+.gstack/

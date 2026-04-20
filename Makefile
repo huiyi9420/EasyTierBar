@@ -34,6 +34,8 @@ $(APP_BUNDLE): $(SOURCES) $(SOURCE_DIR)/Info.plist $(ICNS)
 	mv $(BUILD_DIR)/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/
 	cp $(SOURCE_DIR)/Info.plist $(APP_BUNDLE)/Contents/
 	cp $(ICNS) $(APP_BUNDLE)/Contents/Resources/
+	cp easytier-cli easytier-core $(APP_BUNDLE)/Contents/Resources/
+	chmod +x $(APP_BUNDLE)/Contents/Resources/easytier-cli $(APP_BUNDLE)/Contents/Resources/easytier-core
 	@echo "Build complete: $(APP_BUNDLE)"
 
 clean:
