@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Generate EasyTierBar app icon using Pillow."""
-import math
 from pathlib import Path
 from PIL import Image, ImageDraw
 
@@ -9,59 +8,17 @@ OUT = Path("EasyTierBar/AppIcon.iconset")
 OUT.mkdir(parents=True, exist_ok=True)
 
 
-def rounded_rect(draw, bbox, radius, fill):
-    x0, y0, x1, y1 = bbox
-    draw.rounded_rectangle(bbox, radius=radius, fill=fill)
-
-
-def gradient_bg(img):
-    """Draw vertical gradient from dark blue to teal."""
-    for y in range(SIZE):
-        t = y / SIZE
-        r = int(20 + t * 10)
-        g = int(80 + t * 130)
-        b = int(180 - t * 40)
-        draw = ImageDraw.Draw(img)
-        draw.line([(0, y), (SIZE, y)], fill=(r, g, b))
-
-
 def draw_icon():
-    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    # Rounded rectangle background (macOS squircle-ish)
     margin = 80
     radius = 200
-    rounded_rect(draw, (margin, margin, SIZE - margin, SIZE - margin),
-                 radius, fill=(0, 0, 0, 0))
 
-    # Gradient fill
-    for y in range(margin, SIZE - margin):
-        t = (y - margin) / (SIZE - 2 * margin)
-        r = int(15 + t * 15)
-        g = int(70 + t * 140)
-        b = int(190 - t * 50)
-        draw.line([(margin + radius, y), (SIZE - margin - radius, y)], fill=(r, g, b))
-        # left rounded edge
-        for x in range(margin, margin + radius + 1):
-            dy = abs(y - (margin + radius))
-            if dy <= radius:
-                dx = int(math.sqrt(radius * radius - dy * dy))
-                draw.point((margin + radius - dx, y), fill=(r, g, b))
-        # right rounded edge
-        for x in range(SIZE - margin - radius, SIZE - margin):
-            dy = abs(y - (margin + radius))
-            if dy <= radius:
-                dx = int(math.sqrt(radius * radius - dy * dy))
-                draw.point((SIZE - margin - radius + dx, y), fill=(r, g, b))
-
-    # Re-draw clean rounded rect mask
+    # Rounded rect mask (macOS squircle-ish)
     mask = Image.new("L", (SIZE, SIZE), 0)
     mdraw = ImageDraw.Draw(mask)
     mdraw.rounded_rectangle((margin, margin, SIZE - margin, SIZE - margin),
                             radius=radius, fill=255)
 
-    # Apply gradient to rounded rect shape
+    # Gradient fill clipped to rounded rect
     final = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     grad = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     gdraw = ImageDraw.Draw(grad)

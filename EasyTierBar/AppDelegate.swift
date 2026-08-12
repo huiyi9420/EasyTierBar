@@ -3,59 +3,59 @@ import Cocoa
 class AppDelegate: NSObject, NSApplicationDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let mainMenu = NSMenu()
-    let configMenu = NSMenu()
     let peerMenu = NSMenu()
+
+    private var statusMenuItem: NSMenuItem!
+    private var daemonActionItem: NSMenuItem!
+    private var webConsoleItem: NSMenuItem!
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ServiceManager.shared.isReady else {
-            let alert = NSAlert()
-            alert.messageText = "easytier-cli 未找到"
-            alert.informativeText = "请确保 easytier-cli 在应用包 Resources 目录中。"
-            alert.runModal()
+            showAlert(title: "组件缺失",
+                      message: "easytier-core / easytier-cli 未找到，请确保它们在应用包 Resources 目录中。")
             NSApplication.shared.terminate(nil)
             return
         }
 
-        // Fix Bug 5: remove quarantine attributes from downloaded binaries
         removeQuarantineIfNeeded()
-
         buildMenu()
-        updateUI()
 
-        ServiceManager.shared.onStatusChanged = { [weak self] _ in
-            self?.updateUI()
+        ServiceManager.shared.onStatusChanged = { [weak self] status in
+            self?.applyStatus(status)
+            if status == .running { self?.updatePeerList() }
         }
-        ConfigManager.shared.onConfigsChanged = { [weak self] in
-            self?.rebuildConfigMenu()
-            self?.updateUI()
+        ConfigManager.shared.onConfigChanged = { [weak self] in
+            self?.refreshStatus()
         }
 
         NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(menuWillOpen),
-            name: NSMenu.didBeginTrackingNotification,
-            object: mainMenu)
+            self, selector: #selector(menuWillOpen),
+            name: NSMenu.didBeginTrackingNotification, object: mainMenu)
 
-        if !ConfigManager.shared.hasConfigs {
-            showAddConfigDialog(isFirstLaunch: true)
-        } else {
-            ServiceManager.shared.checkStatus()
-            updatePeerList()
+        // 首次启动必须先配置配置中心地址
+        if !ConfigManager.shared.hasCenter {
+            if let cfg = runCenterDialog(isFirstLaunch: true) {
+                ConfigManager.shared.saveCenter(cfg)
+            } else {
+                NSApplication.shared.terminate(nil)
+                return
+            }
         }
+
+        refreshStatus()
+        updatePeerList()
     }
 
     // MARK: - Menu Building
 
     private func buildMenu() {
-        let toggleItem = mainMenu.addItem(
-            withTitle: "启动 EasyTier", action: #selector(toggleService), keyEquivalent: "t")
-        toggleItem.target = self
+        statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        statusMenuItem.isEnabled = false
+        mainMenu.addItem(statusMenuItem)
 
-        let configItem = NSMenuItem(title: "网络配置", action: nil, keyEquivalent: "")
-        configItem.submenu = configMenu
-        mainMenu.addItem(configItem)
+        mainMenu.addItem(NSMenuItem.separator())
 
         let peersItem = NSMenuItem(title: "已连接节点", action: nil, keyEquivalent: "")
         peersItem.submenu = peerMenu
@@ -63,81 +63,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         mainMenu.addItem(NSMenuItem.separator())
 
-        mainMenu.addItem(
-            withTitle: "关于", action: #selector(showAbout), keyEquivalent: "").target = self
+        webConsoleItem = mainMenu.addItem(
+            withTitle: "打开 Web 控制台", action: #selector(openWebConsole), keyEquivalent: "")
+        webConsoleItem.target = self
 
         mainMenu.addItem(NSMenuItem.separator())
 
-        mainMenu.addItem(
-            withTitle: "退出", action: #selector(quit), keyEquivalent: "q").target = self
+        daemonActionItem = mainMenu.addItem(
+            withTitle: "安装守护进程", action: #selector(toggleDaemon), keyEquivalent: "")
+        daemonActionItem.target = self
+
+        let editItem = mainMenu.addItem(
+            withTitle: "配置中心设置...", action: #selector(editCenterConfig), keyEquivalent: "")
+        editItem.target = self
+
+        mainMenu.addItem(NSMenuItem.separator())
+
+        let aboutItem = mainMenu.addItem(
+            withTitle: "关于", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+
+        mainMenu.addItem(NSMenuItem.separator())
+
+        let quitItem = mainMenu.addItem(
+            withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
 
         statusItem.menu = mainMenu
     }
 
-    private func rebuildConfigMenu() {
-        configMenu.removeAllItems()
+    // MARK: - Status
 
-        let configs = ConfigManager.shared.configs
-        let selectedId = ConfigManager.shared.selectedId
-
-        for config in configs {
-            let item = NSMenuItem(title: config.name, action: #selector(selectConfig(_:)), keyEquivalent: "")
-            item.representedObject = config.id
-            item.state = config.id == selectedId ? .on : .off
-            item.target = self
-            configMenu.addItem(item)
-        }
-
-        if !configs.isEmpty {
-            configMenu.addItem(NSMenuItem.separator())
-        }
-
-        configMenu.addItem(
-            withTitle: "添加配置...", action: #selector(showAddConfig), keyEquivalent: "n").target = self
-        configMenu.addItem(
-            withTitle: "删除当前配置", action: #selector(deleteCurrentConfig), keyEquivalent: "").target = self
+    private func refreshStatus() {
+        ServiceManager.shared.checkStatus()
     }
 
-    // MARK: - UI Update
-
-    func updateUI() {
-        let imageName = ServiceManager.shared.isRunning
-            ? "antenna.radiowaves.left.and.right"
-            : "antenna.radiowaves.left.and.right.slash"
-        statusItem.button?.image = NSImage(
-            systemSymbolName: imageName, accessibilityDescription: "EasyTier")
-
-        if let toggleItem = mainMenu.items.first {
-            let hasConfig = ConfigManager.shared.selectedConfig != nil
-            if !hasConfig {
-                toggleItem.title = "未配置网络"
-            } else {
-                toggleItem.title = ServiceManager.shared.isRunning ? "停止 EasyTier" : "启动 EasyTier"
-            }
+    private func applyStatus(_ status: ServiceManager.DaemonStatus) {
+        let symbolName: String, tint: NSColor, statusText: String, daemonTitle: String
+        switch status {
+        case .running:
+            symbolName = "antenna.radiowaves.left.and.right"
+            tint = .systemGreen
+            statusText = "● 运行中"
+            daemonTitle = "卸载守护进程"
+        case .installedNotReachable:
+            symbolName = "antenna.radiowaves.left.and.right.slash"
+            tint = .systemYellow
+            statusText = "○ 守护进程未响应，启动中…"
+            daemonTitle = "重新安装守护进程"
+        case .notInstalled:
+            symbolName = "antenna.radiowaves.left.and.right.slash"
+            tint = .secondaryLabelColor
+            statusText = ConfigManager.shared.hasCenter ? "⚠ 未安装守护进程" : "⚠ 未配置，请先设置配置中心"
+            daemonTitle = ConfigManager.shared.hasCenter ? "安装守护进程" : "安装守护进程（请先配置）"
         }
-
-        rebuildConfigMenu()
+        statusItem.button?.image = NSImage(
+            systemSymbolName: symbolName, accessibilityDescription: "EasyTier")
+        statusItem.button?.contentTintColor = tint
+        statusMenuItem.title = statusText
+        daemonActionItem.title = daemonTitle
+        // Web 控制台仅在地址有效时可点
+        webConsoleItem.isEnabled =
+            ConfigManager.shared.center?.webConsoleUrl.isEmpty == false
     }
 
     @objc private func menuWillOpen() {
-        ServiceManager.shared.checkStatus()
+        refreshStatus()
         updatePeerList()
     }
 
     private func updatePeerList() {
         peerMenu.removeAllItems()
 
-        if !ServiceManager.shared.isRunning {
-            let item = NSMenuItem(title: "(服务未启动)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            peerMenu.addItem(item)
+        guard ServiceManager.shared.isDaemonInstalled() else {
+            addPeerPlaceholder("(守护进程未安装)")
             return
         }
 
         ServiceManager.shared.fetchPeerList { [weak self] peers in
             guard let self = self else { return }
             self.peerMenu.removeAllItems()
-
             if let peers = peers, !peers.isEmpty {
                 for peer in peers {
                     let item = NSMenuItem(title: peer.displayTitle, action: nil, keyEquivalent: "")
@@ -145,133 +150,177 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } else {
                 let title = peers == nil ? "(获取节点列表失败)" : "(无已连接节点)"
-                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-                item.isEnabled = false
-                self.peerMenu.addItem(item)
+                self.addPeerPlaceholder(title)
             }
         }
     }
 
-    // MARK: - Actions
+    private func addPeerPlaceholder(_ title: String) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        peerMenu.addItem(item)
+    }
 
-    @objc func toggleService() {
-        guard let config = ConfigManager.shared.selectedConfig else { return }
+    // MARK: - Daemon Install / Uninstall (one-time sudo)
 
-        if ServiceManager.shared.isRunning {
-            setToggleState(enabled: false, title: "正在停止...")
-            ServiceManager.shared.stopService { [weak self] success in
-                guard let self = self else { return }
-                self.setToggleState(enabled: true)
-                if !success {
-                    let err = ServiceManager.shared.lastError ?? "无法停止 EasyTier 服务。"
-                    self.showAlert(title: "操作失败", message: err)
-                }
-                self.updateUI()
-            }
+    @objc private func toggleDaemon() {
+        if ServiceManager.shared.isDaemonInstalled() {
+            confirmUninstall()
         } else {
-            setToggleState(enabled: false, title: "正在启动...")
-            ServiceManager.shared.startService(configUrl: config.url) { [weak self] success in
-                guard let self = self else { return }
-                self.setToggleState(enabled: true)
-                if !success {
-                    let err = ServiceManager.shared.lastError ?? "无法启动 EasyTier 服务。"
-                    self.showAlert(title: "操作失败", message: err)
-                }
-                self.updateUI()
-            }
+            confirmInstall()
         }
     }
 
-    private func setToggleState(enabled: Bool, title: String? = nil) {
-        guard let toggleItem = mainMenu.items.first else { return }
-        toggleItem.isEnabled = enabled
-        if let title = title { toggleItem.title = title }
-    }
-
-    @objc func selectConfig(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID else { return }
-        ConfigManager.shared.selectConfig(id: id)
-        updateUI()
-    }
-
-    // MARK: - Config Management
-
-    @objc func showAddConfig() {
-        showAddConfigDialog(isFirstLaunch: false)
-    }
-
-    func showAddConfigDialog(isFirstLaunch: Bool) {
+    private func confirmInstall() {
+        guard let center = ConfigManager.shared.center else {
+            showAlert(title: "未配置", message: "请先在「配置中心设置」中填写配置中心地址。")
+            return
+        }
         let alert = NSAlert()
-        alert.messageText = isFirstLaunch ? "欢迎使用 EasyTierBar" : "添加网络配置"
+        alert.messageText = "安装守护进程"
+        alert.informativeText =
+            "将创建系统级 LaunchDaemon 并立即启动，连接配置中心：\n\(center.configServerUrl)\n\n接下来会弹出系统密码框（仅此一次）。"
+        alert.addButton(withTitle: "安装")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let stackView = NSStackView()
-        stackView.orientation = .vertical
-        stackView.spacing = 8
-
-        let nameField = NSTextField()
-        nameField.placeholderString = "配置名称（如：Home、Office）"
-        stackView.addArrangedSubview(nameField)
-
-        let urlField = NSTextField()
-        urlField.placeholderString = "udp://host:port/network"
-        stackView.addArrangedSubview(urlField)
-
-        stackView.frame = NSRect(x: 0, y: 0, width: 300, height: 58)
-        alert.accessoryView = stackView
-
-        alert.addButton(withTitle: "添加")
-        if !isFirstLaunch {
-            alert.addButton(withTitle: "取消")
-        }
-
-        let response = alert.runModal()
-
-        if response == .alertFirstButtonReturn {
-            let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-            let url = urlField.stringValue.trimmingCharacters(in: .whitespaces)
-
-            guard !name.isEmpty, !url.isEmpty else {
-                showAlert(title: "输入无效", message: "名称和 URL 不能为空。")
-                if isFirstLaunch { showAddConfigDialog(isFirstLaunch: true) }
-                return
+        daemonActionItem.isEnabled = false
+        daemonActionItem.title = "正在安装…"
+        ServiceManager.shared.installDaemon { [weak self] ok in
+            self?.daemonActionItem.isEnabled = true
+            if !ok {
+                self?.showAlert(title: "安装失败",
+                                message: ServiceManager.shared.lastError ?? "未知错误")
             }
-
-            _ = ConfigManager.shared.addConfig(name: name, url: url)
-            updateUI()
-        } else if isFirstLaunch {
-            NSApplication.shared.terminate(nil)
+            self?.refreshStatus()
         }
     }
 
-    @objc func deleteCurrentConfig() {
-        guard let config = ConfigManager.shared.selectedConfig else { return }
-
+    private func confirmUninstall() {
         let alert = NSAlert()
-        alert.messageText = "删除配置"
-        alert.informativeText = "确定删除配置「\(config.name)」吗？"
-        alert.addButton(withTitle: "删除")
+        alert.messageText = "卸载守护进程"
+        alert.informativeText = "将停止 easytier-core 并移除 LaunchDaemon。"
+        alert.addButton(withTitle: "卸载")
         alert.addButton(withTitle: "取消")
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            ConfigManager.shared.deleteConfig(id: config.id)
-            updateUI()
+        let purgeCheckbox = NSButton(
+            checkboxWithTitle: "同时清除本地网络配置（config-dir）", target: nil, action: nil)
+        alert.accessoryView = purgeCheckbox
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        daemonActionItem.isEnabled = false
+        daemonActionItem.title = "正在卸载…"
+        ServiceManager.shared.uninstallDaemon(removeConfigs: purgeCheckbox.state == .on) { [weak self] ok in
+            self?.daemonActionItem.isEnabled = true
+            if !ok {
+                self?.showAlert(title: "卸载失败",
+                                message: ServiceManager.shared.lastError ?? "未知错误")
+            }
+            self?.refreshStatus()
         }
+    }
+
+    // MARK: - Web Console
+
+    @objc private func openWebConsole() {
+        guard let urlStr = ConfigManager.shared.center?.webConsoleUrl,
+              !urlStr.isEmpty,
+              let url = URL(string: urlStr) else {
+            showAlert(title: "未配置", message: "请先在「配置中心设置」中填写 Web 控制台地址。")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Center Config
+
+    @objc private func editCenterConfig() {
+        let wasInstalled = ServiceManager.shared.isDaemonInstalled()
+        let old = ConfigManager.shared.center
+        guard let cfg = runCenterDialog(isFirstLaunch: false) else { return }
+        ConfigManager.shared.saveCenter(cfg)
+
+        // 地址变更且守护进程已装：需要重装才生效
+        if wasInstalled && old != cfg {
+            let alert = NSAlert()
+            alert.messageText = "地址已变更"
+            alert.informativeText = "配置变更需要重新安装守护进程才能生效（会弹出系统密码框）。现在重装吗？"
+            alert.addButton(withTitle: "立即重装")
+            alert.addButton(withTitle: "稍后")
+            if alert.runModal() == .alertFirstButtonReturn {
+                daemonActionItem.isEnabled = false
+                daemonActionItem.title = "正在重装…"
+                ServiceManager.shared.installDaemon { [weak self] _ in
+                    self?.daemonActionItem.isEnabled = true
+                    self?.refreshStatus()
+                }
+            }
+        }
+    }
+
+    /// 弹出配置中心设置对话框。返回用户填写的配置；nil 表示取消。
+    private func runCenterDialog(isFirstLaunch: Bool) -> CenterConfig? {
+        let alert = NSAlert()
+        alert.messageText = isFirstLaunch ? "欢迎使用 EasyTierBar" : "配置中心设置"
+        alert.informativeText =
+            "配置中心地址用于 core 连接（-w）；Web 控制台地址用浏览器打开。二者协议/端口可能不同。"
+
+        let serverField = NSTextField()
+        serverField.placeholderString = "udp://host:port/user"
+        serverField.stringValue = ConfigManager.shared.center?.configServerUrl ?? ""
+        let webField = NSTextField()
+        webField.placeholderString = "https://host"
+        webField.stringValue = ConfigManager.shared.center?.webConsoleUrl ?? ""
+
+        let stack = NSStackView(views: [
+            makeRow(label: "配置中心地址", field: serverField),
+            makeRow(label: "Web 控制台", field: webField),
+        ])
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 360, height: 64)
+        alert.accessoryView = stack
+
+        alert.addButton(withTitle: "保存")
+        if !isFirstLaunch { alert.addButton(withTitle: "取消") }
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+
+        let server = serverField.stringValue.trimmingCharacters(in: .whitespaces)
+        let web = webField.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !server.isEmpty, !web.isEmpty else {
+            showAlert(title: "输入无效", message: "配置中心地址和 Web 控制台地址都不能为空。")
+            return runCenterDialog(isFirstLaunch: isFirstLaunch)
+        }
+        return CenterConfig(configServerUrl: server, webConsoleUrl: web)
+    }
+
+    private func makeRow(label text: String, field: NSTextField) -> NSView {
+        let l = NSTextField(labelWithString: text)
+        l.alignment = .right
+        l.textColor = .secondaryLabelColor
+        let row = NSStackView(views: [l, field])
+        row.orientation = .horizontal
+        row.spacing = 8
+        l.widthAnchor.constraint(equalToConstant: 96).isActive = true
+        field.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        return row
     }
 
     // MARK: - About & Quit
 
-    @objc func showAbout() {
+    @objc private func showAbout() {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let alert = NSAlert()
         alert.messageText = "EasyTierBar v\(version)"
-        alert.informativeText = "macOS 菜单栏工具 for EasyTier VPN"
+        alert.informativeText = "macOS 菜单栏看护工具 for EasyTier（Web-Managed 模式）"
         alert.runModal()
     }
 
-    @objc func quit() {
-        if ServiceManager.shared.isRunning {
-            ServiceManager.shared.stopService { _ in }
-        }
+    @objc private func quit() {
+        // daemon 常驻，退出 app 不影响网络。
         NSApplication.shared.terminate(nil)
     }
 

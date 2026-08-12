@@ -1,33 +1,22 @@
 import Foundation
 
-struct NetworkConfig: Codable, Equatable {
-    let id: UUID
-    let name: String
-    let url: String
-
-    init(id: UUID = UUID(), name: String, url: String) {
-        self.id = id
-        self.name = name
-        self.url = url
-    }
+/// 配置中心连接配置。
+/// 两字段独立、各自必填：协议/端口/路径都不同，不能互相推导。
+/// - configServerUrl: 传给 easytier-core 的 `-w` 参数，core 用它连接配置中心。如 `udp://web-et.seeyon.ink:22020/admin`
+/// - webConsoleUrl:    浏览器打开的 web 控制台地址。如 `https://web-et.seeyon.ink`
+struct CenterConfig: Codable, Equatable {
+    var configServerUrl: String
+    var webConsoleUrl: String
 }
 
 class ConfigManager {
     static let shared = ConfigManager()
-    private let configsKey = "networkConfigs"
-    private let selectedKey = "selectedConfigId"
+    private let key = "centerConfig"
 
-    private(set) var configs: [NetworkConfig] = []
-    private(set) var selectedId: UUID?
-    var onConfigsChanged: (() -> Void)?
+    private(set) var center: CenterConfig?
+    var onConfigChanged: (() -> Void)?
 
-    var selectedConfig: NetworkConfig? {
-        configs.first { $0.id == selectedId }
-    }
-
-    var hasConfigs: Bool {
-        !configs.isEmpty
-    }
+    var hasCenter: Bool { center != nil }
 
     private init() {
         load()
@@ -36,46 +25,15 @@ class ConfigManager {
     // MARK: - Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: configsKey) else { return }
-        configs = (try? JSONDecoder().decode([NetworkConfig].self, from: data)) ?? []
-        if let idString = UserDefaults.standard.string(forKey: selectedKey),
-           let uuid = UUID(uuidString: idString) {
-            selectedId = uuid
-        }
+        guard let data = UserDefaults.standard.data(forKey: key) else { return }
+        center = try? JSONDecoder().decode(CenterConfig.self, from: data)
     }
 
-    private func save() {
-        if let data = try? JSONEncoder().encode(configs) {
-            UserDefaults.standard.set(data, forKey: configsKey)
+    func saveCenter(_ config: CenterConfig) {
+        if let data = try? JSONEncoder().encode(config) {
+            UserDefaults.standard.set(data, forKey: key)
         }
-        onConfigsChanged?()
-    }
-
-    // MARK: - CRUD
-
-    func addConfig(name: String, url: String) -> NetworkConfig {
-        let config = NetworkConfig(name: name, url: url)
-        configs.append(config)
-        if configs.count == 1 {
-            selectedId = config.id
-            UserDefaults.standard.set(config.id.uuidString, forKey: selectedKey)
-        }
-        save()
-        return config
-    }
-
-    func deleteConfig(id: UUID) {
-        configs.removeAll { $0.id == id }
-        if selectedId == id {
-            selectedId = configs.first?.id
-            UserDefaults.standard.set(selectedId?.uuidString, forKey: selectedKey)
-        }
-        save()
-    }
-
-    func selectConfig(id: UUID) {
-        guard configs.contains(where: { $0.id == id }) else { return }
-        selectedId = id
-        UserDefaults.standard.set(id.uuidString, forKey: selectedKey)
+        center = config
+        onConfigChanged?()
     }
 }

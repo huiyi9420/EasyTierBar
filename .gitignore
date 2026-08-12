@@ -26,3 +26,6 @@ docs/superpowers/
 
 # gstack local data
 .gstack/
+
+# ZCode agent workspace
+.zcode/
