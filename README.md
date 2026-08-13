@@ -7,10 +7,12 @@ macOS 菜单栏看护工具，为 [EasyTier](https://github.com/EasyTier/EasyTie
 ## 功能
 
 - **常驻守护进程** — 一次性安装系统级 LaunchDaemon，开机自启、崩溃自愈、自动连配置中心
-- **三态状态** — 运行中 / 守护进程未响应 / 未安装，一目了然
+- **四态健康状态** — 运行中(绿) / 未连通网络(橙) / 守护进程未响应(黄) / 未安装(灰)。不只看进程在不在，还看是否有对端 peer，避免「进程活着但 VPN 早断了」的误报
+- **定时自动刷新** — 默认每 5 分钟自动检测一次状态（可调：关闭 / 1分 / 5分 / 15分），无需打开菜单也能及时发现断开
+- **网络失联恢复** — 菜单「重启守护进程」一键重启 core（弹一次密码，保留配置），用于配置中心 session 失联、网络卡死等场景
 - **Web 控制台入口** — 一键打开浏览器进入配置中心，统一管理网络实例
 - **节点信息** — 查看已连接节点（主机名、IP、延迟、丢包率、版本等），走 RPC 无需密码
-- **日常零密码** — 仅安装/卸载守护进程需要一次管理员密码，日常查看与打开 Web 控制台均免密
+- **日常零密码** — 仅安装/卸载/重启守护进程需要管理员密码，日常查看、刷新、打开 Web 控制台均免密
 - **自动构建** — CI/CD 自动监听上游 EasyTier 发版，自动打包发布
 
 ## 适用场景
@@ -27,16 +29,19 @@ macOS 菜单栏看护工具，为 [EasyTier](https://github.com/EasyTier/EasyTie
 
 ```
 ┌─────────────────────────────────┐
-│  ● 运行中                       │
+│  ● 运行中        (绿/橙/黄/灰)  │
 ├─────────────────────────────────┤
 │  已连接节点           ▸         │
 │    easytier-moon               │
 │    10.126.126.7 · 60ms · v2.6  │
 ├─────────────────────────────────┤
+│  刷新状态                       │
 │  打开 Web 控制台                │
 ├─────────────────────────────────┤
 │  卸载守护进程                   │
+│  重启守护进程                   │
 │  配置中心设置...                │
+│  自动检测间隔        ▸          │
 ├─────────────────────────────────┤
 │  关于                           │
 │  退出                           │
@@ -84,7 +89,9 @@ EasyTierBar 把单个 `easytier-core` 作为**常驻 LaunchDaemon** 运行（roo
 |------|----------|------|
 | 安装守护进程 | 写 launchd plist + `launchctl load`（AppleScript sudo） | 一次性 root |
 | 卸载守护进程 | `launchctl unload` + `rm plist` + `pkill`（AppleScript sudo） | 一次性 root |
-| 状态检测 | `easytier-cli node info`（RPC `127.0.0.1:15888`） | 无需 root |
+| 重启守护进程 | `launchctl kickstart -k system/...`（AppleScript sudo，保留配置） | 一次性 root |
+| 状态检测 | `easytier-cli node info` + `peer list`（RPC `127.0.0.1:15888`） | 无需 root |
+| 定时刷新 | app 内 Timer，默认 5 分钟（可配置），自动跑状态检测 | 无需 root |
 | 节点查询 | `easytier-cli -o json peer list`（RPC） | 无需 root |
 | 网络启停 | 在 Web 控制台操作（配置中心 `reconcile` 下发） | Web 端 |
 
@@ -104,8 +111,8 @@ easytier-core --daemon \
 ```
 EasyTierBar/
 ├── main.swift              # 应用入口
-├── AppDelegate.swift       # 菜单 UI、三态状态、安装/卸载、Web 控制台入口
-├── ServiceManager.swift    # 守护进程安装/卸载、RPC 状态检测、节点查询
+├── AppDelegate.swift       # 菜单 UI、四态状态、安装/卸载/重启、定时刷新、Web 控制台入口
+├── ServiceManager.swift    # 守护进程安装/卸载/重启、RPC 状态与健康检测、节点查询
 ├── ConfigManager.swift     # 配置中心地址持久化（UserDefaults，单条）
 └── Info.plist              # 应用元数据 (com.easytier.menubar)
 Makefile                    # 本地构建脚本
@@ -179,15 +186,21 @@ EasyTierBar 定位为**常驻守护进程的看护者**。在 Web-Managed（conf
 
 想临时断开：去 Web 控制台停这台机器的网络实例，或在菜单里「卸载守护进程」。
 
-### 安装/卸载时弹出密码框
+### 安装/卸载/重启时弹出密码框
 
-创建/移除系统级 LaunchDaemon 需要 root 权限，通过 macOS 原生 AppleScript 弹出管理员认证框。**仅在安装和卸载守护进程时各弹一次**，日常使用不会弹。
+创建/移除/重启系统级 LaunchDaemon 需要 root 权限，通过 macOS 原生 AppleScript 弹出管理员认证框。**仅在这三种操作时弹**，日常查看、刷新、打开 Web 控制台都不会弹。
 
 ### 守护进程已安装但状态显示「未响应」
 
 通常是 `easytier-core` 启动较慢或连接配置中心失败。查看 `/tmp/easytier-core.log` 确认：
 - 配置中心地址是否正确、是否可达
 - 15888 端口是否被占用（是否有手动运行的 core 未被清理）
+
+### 显示「运行中」但实际连不上公司网络
+
+状态判定为「运行中」的条件是：core 进程在跑 + RPC 可达 + 有对端 peer。但存在一种**死链残留**情况——某台对端（如公司内网入口节点）实际已断开、零流量，却仍残留在 peer 列表里，导致状态还是绿色。这时可去 **Web 控制台** 确认这台机器是否还在设备列表：若不在，说明配置中心 session 已断。
+
+解决办法：菜单 →「重启守护进程」（输一次密码，保留配置），让 core 重新连接配置中心、重新协商 peer。也可终端直接执行 `sudo launchctl kickstart -k system/com.easytier.core`。
 
 ### 如何完全卸载
 
@@ -204,7 +217,7 @@ EasyTierBar 定位为**常驻守护进程的看护者**。在 Web-Managed（conf
 | 服务管理 | launchd（macOS 原生服务管理器） |
 | 控制接口 | EasyTier RPC（`easytier-cli` over `127.0.0.1:15888`） |
 | 目标平台 | macOS aarch64 (Apple Silicon) |
-| 权限模型 | AppleScript `do shell script with administrator privileges`（仅安装/卸载） |
+| 权限模型 | AppleScript `do shell script with administrator privileges`（仅安装/卸载/重启） |
 
 ## 贡献
 
