@@ -18,6 +18,16 @@ class ConfigManager {
 
     var hasCenter: Bool { center != nil }
 
+    /// 状态自动检测间隔（秒）。0 = 关闭定时检测。默认 300（5 分钟），
+    /// 平衡及时性与耗电（每次检测要起 2 个 easytier-cli 子进程）。
+    var statusIntervalSeconds: Double {
+        get {
+            let v = UserDefaults.standard.object(forKey: "statusInterval") as? Double
+            return v ?? 300
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "statusInterval") }
+    }
+
     private init() {
         load()
     }

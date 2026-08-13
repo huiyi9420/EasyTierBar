@@ -10,6 +10,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var webConsoleItem: NSMenuItem!
     private var restartItem: NSMenuItem!
     private var statusTimer: Timer?
+    private let intervalMenu = NSMenu()
 
     // MARK: - Lifecycle
 
@@ -49,13 +50,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         refreshStatus()
         updatePeerList()
 
-        // 每 60 秒自动刷新状态，避免长时间不打开菜单导致状态冻结（如挂机一晚）
-        statusTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            self?.refreshStatus()
-        }
-        if let timer = statusTimer {
-            RunLoop.main.add(timer, forMode: .common)
-        }
+        // 按用户设置的间隔启动定时刷新（默认 5 分钟，可在「自动检测间隔」调整）
+        setupStatusTimer()
     }
 
     // MARK: - Menu Building
@@ -94,6 +90,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let editItem = mainMenu.addItem(
             withTitle: "配置中心设置...", action: #selector(editCenterConfig), keyEquivalent: "")
         editItem.target = self
+
+        let intervalItem = NSMenuItem(title: "自动检测间隔", action: nil, keyEquivalent: "")
+        intervalItem.submenu = intervalMenu
+        mainMenu.addItem(intervalItem)
+        rebuildIntervalMenu()
 
         mainMenu.addItem(NSMenuItem.separator())
 
@@ -250,6 +251,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func refreshAction() {
         refreshStatus()
         updatePeerList()
+    }
+
+    /// 按用户设置的间隔（statusIntervalSeconds）重建定时器。0 = 关闭定时检测。
+    private func setupStatusTimer() {
+        statusTimer?.invalidate()
+        statusTimer = nil
+        let secs = ConfigManager.shared.statusIntervalSeconds
+        guard secs > 0 else { return }
+        statusTimer = Timer(timeInterval: secs, repeats: true) { [weak self] _ in
+            self?.refreshStatus()
+        }
+        if let timer = statusTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func rebuildIntervalMenu() {
+        intervalMenu.removeAllItems()
+        let current = ConfigManager.shared.statusIntervalSeconds
+        let options: [(String, Double)] = [
+            ("关闭", 0),
+            ("1 分钟", 60),
+            ("5 分钟", 300),
+            ("15 分钟", 900),
+        ]
+        for (title, secs) in options {
+            let item = NSMenuItem(title: title, action: #selector(changeInterval(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = secs
+            item.state = abs(current - secs) < 0.1 ? .on : .off
+            intervalMenu.addItem(item)
+        }
+    }
+
+    @objc private func changeInterval(_ sender: NSMenuItem) {
+        guard let secs = sender.representedObject as? Double else { return }
+        ConfigManager.shared.statusIntervalSeconds = secs
+        rebuildIntervalMenu()
+        setupStatusTimer()
     }
 
     @objc private func restartAction() {
