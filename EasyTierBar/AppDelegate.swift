@@ -117,6 +117,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ServiceManager.shared.checkStatus()
     }
 
+    /// 把颜色烘焙进 image。菜单栏 status item 会忽略 button 的 contentTintColor
+    /// （强制模板单色渲染），所以必须用 sourceAtop 合成把 tint 染到图标的形状上。
+    private func statusImage(symbolName: String, tint: NSColor) -> NSImage? {
+        guard let base = NSImage(systemSymbolName: symbolName,
+                                 accessibilityDescription: "EasyTier") else { return nil }
+        let size = NSSize(width: 18, height: 18)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        base.draw(in: NSRect(origin: .zero, size: size))
+        tint.set()
+        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+        img.unlockFocus()
+        img.isTemplate = false
+        return img
+    }
+
     private func applyStatus(_ status: ServiceManager.DaemonStatus) {
         let symbolName: String, tint: NSColor, statusText: String, daemonTitle: String
         switch status {
@@ -141,9 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusText = ConfigManager.shared.hasCenter ? "⚠ 未安装守护进程" : "⚠ 未配置，请先设置配置中心"
             daemonTitle = ConfigManager.shared.hasCenter ? "安装守护进程" : "安装守护进程（请先配置）"
         }
-        statusItem.button?.image = NSImage(
-            systemSymbolName: symbolName, accessibilityDescription: "EasyTier")
-        statusItem.button?.contentTintColor = tint
+        statusItem.button?.image = statusImage(symbolName: symbolName, tint: tint)
         statusMenuItem.title = statusText
         daemonActionItem.title = daemonTitle
         restartItem.isEnabled = status != .notInstalled
