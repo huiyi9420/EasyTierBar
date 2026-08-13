@@ -35,6 +35,7 @@ class ServiceManager {
     enum DaemonStatus {
         case notInstalled
         case installedNotReachable
+        case noNetwork      // RPC 可达但无对端 peer（core 活着，网络层未连通）
         case running
     }
 
@@ -45,8 +46,12 @@ class ServiceManager {
             let status: DaemonStatus
             if !self.isDaemonInstalled() {
                 status = .notInstalled
+            } else if !self.coreReachableSync() {
+                status = .installedNotReachable
             } else {
-                status = self.coreReachableSync() ? .running : .installedNotReachable
+                // RPC 可达：再看是否有对端 peer（本机之外的节点），
+                // 否则只是 core 进程活着、网络层实际未连通。
+                status = self.hasPeerSync() ? .running : .noNetwork
             }
             os_log("checkStatus: %{public}@", log: log, type: .info, String(describing: status))
             DispatchQueue.main.async {
@@ -90,6 +95,29 @@ class ServiceManager {
         try? process.run()
         process.waitUntilExit()
         return process.terminationStatus == 0
+    }
+
+    /// 同步检测是否有对端 peer（本机之外）。RPC 可达但无 peer，说明 core 活着但
+    /// 网络层未连通（如配置中心 session 断开、对端全失联）。必须在后台队列调用。
+    private func hasPeerSync() -> Bool {
+        guard let path = cliPath else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["-o", "json", "peer", "list"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return false }
+            let data = try pipe.fileHandleForReading.readToEnd() ?? Data()
+            // peer 列表含本机（cost=Local），数组长度 > 1 表示还有其他 peer
+            guard let peers = try? JSONDecoder().decode([Peer].self, from: data) else { return false }
+            return peers.count > 1
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Install / Uninstall (one-time, sudo)
@@ -159,6 +187,40 @@ class ServiceManager {
         } else {
             lastError = err ?? "无法卸载守护进程"
             completion(false)
+        }
+    }
+
+    /// 重启守护进程（保留配置，只重启 core 进程）。用于网络层卡死、配置中心
+    /// session 失联等场景——重启后 core 会重新连配置中心、重新协商 peer。
+    /// 走 AppleScript sudo（system domain 的 kickstart 需要 root）。
+    func restartDaemon(completion: @escaping (Bool) -> Void = { _ in }) {
+        guard isDaemonInstalled() else {
+            lastError = "守护进程未安装"
+            completion(false)
+            return
+        }
+        lastError = nil
+        let cmd = "launchctl kickstart -k system/\(launchdLabel)"
+        os_log("restartDaemon: cmd=%{public}@", log: log, type: .info, cmd)
+        let (ok, err) = runAppleScriptSudo(command: cmd)
+        guard ok else {
+            lastError = err
+            completion(false)
+            return
+        }
+        // 轮询等待 core 重启后 RPC 恢复（重启需几秒）
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var reachable = false
+            for _ in 0..<15 {
+                Thread.sleep(forTimeInterval: 1.0)
+                if self?.coreReachableSync() == true { reachable = true; break }
+            }
+            DispatchQueue.main.async {
+                if !reachable {
+                    self?.lastError = "守护进程重启后未响应，请检查 /tmp/easytier-core.log"
+                }
+                completion(reachable)
+            }
         }
     }
 

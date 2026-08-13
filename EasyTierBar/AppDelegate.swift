@@ -8,6 +8,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenuItem: NSMenuItem!
     private var daemonActionItem: NSMenuItem!
     private var webConsoleItem: NSMenuItem!
+    private var restartItem: NSMenuItem!
+    private var statusTimer: Timer?
 
     // MARK: - Lifecycle
 
@@ -46,6 +48,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         refreshStatus()
         updatePeerList()
+
+        // 每 60 秒自动刷新状态，避免长时间不打开菜单导致状态冻结（如挂机一晚）
+        statusTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.refreshStatus()
+        }
+        if let timer = statusTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
     // MARK: - Menu Building
@@ -63,6 +73,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         mainMenu.addItem(NSMenuItem.separator())
 
+        let refreshItem = mainMenu.addItem(
+            withTitle: "刷新状态", action: #selector(refreshAction), keyEquivalent: "r")
+        refreshItem.target = self
+
         webConsoleItem = mainMenu.addItem(
             withTitle: "打开 Web 控制台", action: #selector(openWebConsole), keyEquivalent: "")
         webConsoleItem.target = self
@@ -72,6 +86,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         daemonActionItem = mainMenu.addItem(
             withTitle: "安装守护进程", action: #selector(toggleDaemon), keyEquivalent: "")
         daemonActionItem.target = self
+
+        restartItem = mainMenu.addItem(
+            withTitle: "重启守护进程", action: #selector(restartAction), keyEquivalent: "")
+        restartItem.target = self
 
         let editItem = mainMenu.addItem(
             withTitle: "配置中心设置...", action: #selector(editCenterConfig), keyEquivalent: "")
@@ -106,6 +124,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             tint = .systemGreen
             statusText = "● 运行中"
             daemonTitle = "卸载守护进程"
+        case .noNetwork:
+            symbolName = "antenna.radiowaves.left.and.right.slash"
+            tint = .systemOrange
+            statusText = "● 守护进程运行中，未连通网络"
+            daemonTitle = "卸载守护进程"
         case .installedNotReachable:
             symbolName = "antenna.radiowaves.left.and.right.slash"
             tint = .systemYellow
@@ -122,6 +145,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.contentTintColor = tint
         statusMenuItem.title = statusText
         daemonActionItem.title = daemonTitle
+        restartItem.isEnabled = status != .notInstalled
         // Web 控制台仅在地址有效时可点
         webConsoleItem.isEnabled =
             ConfigManager.shared.center?.webConsoleUrl.isEmpty == false
@@ -215,6 +239,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.daemonActionItem.isEnabled = true
             if !ok {
                 self?.showAlert(title: "卸载失败",
+                                message: ServiceManager.shared.lastError ?? "未知错误")
+            }
+            self?.refreshStatus()
+        }
+    }
+
+    // MARK: - Refresh / Restart
+
+    @objc private func refreshAction() {
+        refreshStatus()
+        updatePeerList()
+    }
+
+    @objc private func restartAction() {
+        let alert = NSAlert()
+        alert.messageText = "重启守护进程"
+        alert.informativeText =
+            "将重启 easytier-core 进程（保留配置），让它重新连接配置中心与对端。\n适用于网络卡死、配置中心失联等场景。\n会弹出系统密码框。"
+        alert.addButton(withTitle: "重启")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        restartItem.isEnabled = false
+        restartItem.title = "正在重启…"
+        ServiceManager.shared.restartDaemon { [weak self] ok in
+            self?.restartItem.isEnabled = true
+            self?.restartItem.title = "重启守护进程"
+            if !ok {
+                self?.showAlert(title: "重启失败",
                                 message: ServiceManager.shared.lastError ?? "未知错误")
             }
             self?.refreshStatus()
