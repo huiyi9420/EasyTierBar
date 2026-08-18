@@ -60,7 +60,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildMenu() {
         vpnToggleItem = mainMenu.addItem(
-            withTitle: "停止 VPN", action: #selector(toggleVPN), keyEquivalent: "s")
+            withTitle: "停止", action: #selector(toggleVPN), keyEquivalent: "s")
         vpnToggleItem.target = self
 
         statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -173,14 +173,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         daemonActionItem.title = daemonTitle
         restartItem.isEnabled = status != .notInstalled
         currentStatus = status
-        // 启停 VPN：未安装时隐藏；在跑显示「停止」，已停显示「启动」
+        // 启停：未安装时隐藏；在跑显示「停止」，已停显示「启动」
         switch status {
         case .running, .noNetwork, .installedNotReachable:
             vpnToggleItem.isHidden = false
-            vpnToggleItem.title = "停止 VPN"
+            vpnToggleItem.title = "停止"
         case .stopped:
             vpnToggleItem.isHidden = false
-            vpnToggleItem.title = "启动 VPN"
+            vpnToggleItem.title = "启动"
         case .notInstalled:
             vpnToggleItem.isHidden = true
         }
@@ -202,7 +202,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         guard ServiceManager.shared.isCoreRunning() else {
-            addPeerPlaceholder("(VPN 已停止)")
+            addPeerPlaceholder("(已停止)")
             return
         }
 

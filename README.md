@@ -7,13 +7,13 @@ macOS 菜单栏看护工具，为 [EasyTier](https://github.com/EasyTier/EasyTie
 ## 功能
 
 - **常驻守护进程** — 一次性安装系统级 LaunchDaemon，开机自启、崩溃自愈、自动连配置中心
-- **一键启停 VPN** — 菜单第一项「启动/停止 VPN」，基于安装时写入的最小 sudoers 免密规则，免密秒切。停止是临时的，重启电脑后自动恢复
+- **一键启停** — 菜单第一项「启动 / 停止」，操作时输入管理员密码。停止是临时的，重启电脑后自动恢复
 - **五态健康状态** — 运行中(绿) / 未连通网络(橙) / 守护进程未响应(黄) / 已停止(灰) / 未安装(灰)。不只看进程在不在，还看是否有对端 peer，避免「进程活着但 VPN 早断了」的误报
 - **定时自动刷新** — 默认每 5 分钟自动检测一次状态（可调：关闭 / 1分 / 5分 / 15分），无需打开菜单也能及时发现断开
 - **网络失联恢复** — 菜单「重启守护进程」一键重启 core（弹一次密码，保留配置），用于配置中心 session 失联、网络卡死等场景
 - **Web 控制台入口** — 一键打开浏览器进入配置中心，统一管理网络实例
 - **节点信息** — 查看已连接节点（主机名、IP、延迟、丢包率、版本等），走 RPC 无需密码
-- **日常零密码** — 仅安装/卸载/重启守护进程需要管理员密码；启停 VPN 走 sudoers 免密；日常查看、刷新、打开 Web 控制台均免密
+- **操作简单** — 安装/卸载/重启/启停时输入管理员密码，日常查看状态、节点、打开 Web 控制台均免密
 - **自动构建** — CI/CD 自动监听上游 EasyTier 发版，自动打包发布
 
 ## 适用场景
@@ -30,7 +30,7 @@ macOS 菜单栏看护工具，为 [EasyTier](https://github.com/EasyTier/EasyTie
 
 ```
 ┌─────────────────────────────────┐
-│  停止 VPN          (或 启动 VPN) │
+│  停止                (或 启动)   │
 │  ● 运行中        (绿/橙/黄/灰)  │
 ├─────────────────────────────────┤
 │  已连接节点           ▸         │
@@ -89,9 +89,9 @@ EasyTierBar 把单个 `easytier-core` 作为**常驻 LaunchDaemon** 运行（roo
 
 | 操作 | 实现方式 | 权限 |
 |------|----------|------|
-| 安装守护进程 | 写 launchd plist + `launchctl load` + 写 sudoers 免密规则（`visudo -cf` 校验）（AppleScript sudo） | 一次性 root |
-| 卸载守护进程 | `launchctl unload` + `rm plist` + `pkill` + 清理 sudoers（AppleScript sudo） | 一次性 root |
-| **启动/停止 VPN** | `sudo -n launchctl load -w / unload`（靠安装时写入的最小 sudoers 免密规则） | **免密** |
+| 安装守护进程 | 写 launchd plist + `launchctl load`（AppleScript sudo） | 一次性 root |
+| 卸载守护进程 | `launchctl unload` + `rm plist` + `pkill`（AppleScript sudo） | 一次性 root |
+| 启动/停止 | `launchctl load -w / unload`（AppleScript sudo，弹密码框） | 每次输密码 |
 | 重启守护进程 | `launchctl kickstart -k system/...`（AppleScript sudo，保留配置） | 一次性 root |
 | 状态检测 | `easytier-cli node info` + `peer list`（RPC `127.0.0.1:15888`） | 无需 root |
 | 定时刷新 | app 内 Timer，默认 5 分钟（可配置），自动跑状态检测 | 无需 root |
@@ -183,10 +183,10 @@ xattr -cr /Applications/EasyTierBar.app
 
 应用启动时也会自动执行此操作。
 
-### 「停止 VPN」和「卸载守护进程」的区别？
+### 「停止」和「卸载守护进程」的区别？
 
-- **停止 VPN**（免密）：临时卸载 LaunchDaemon——VPN 立即断开、TUN 拆除，但配置和守护进程保留。重启电脑后自动恢复，也可随时点「启动 VPN」。
-- **卸载守护进程**（弹密码）：永久移除——删除 plist 与 sudoers 免密规则，可选清除本地网络配置。
+- **停止**（输密码）：临时卸载 LaunchDaemon——VPN 立即断开，但配置和守护进程保留。重启电脑后自动恢复，也可随时点「启动」。
+- **卸载守护进程**（输密码）：永久移除——删除 plist，可选清除本地网络配置。
 
 本地停止是可靠的：停的是整个 core 守护进程（连同配置中心连接一起断开），而非单独停某个网络实例，因此不存在「被配置中心 reconcile 重新拉起」的问题。
 
@@ -221,7 +221,7 @@ xattr -cr /Applications/EasyTierBar.app
 | 服务管理 | launchd（macOS 原生服务管理器） |
 | 控制接口 | EasyTier RPC（`easytier-cli` over `127.0.0.1:15888`） |
 | 目标平台 | macOS aarch64 (Apple Silicon) |
-| 权限模型 | AppleScript `do shell script with administrator privileges`（仅安装/卸载/重启）+ 最小 sudoers 免密（启停 VPN） |
+| 权限模型 | AppleScript `do shell script with administrator privileges`（安装/卸载/重启/启停） |
 
 ## 贡献
 
