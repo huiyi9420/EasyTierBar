@@ -9,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var daemonActionItem: NSMenuItem!
     private var webConsoleItem: NSMenuItem!
     private var restartItem: NSMenuItem!
+    private var vpnToggleItem: NSMenuItem!
+    private var currentStatus: ServiceManager.DaemonStatus?
     private var statusTimer: Timer?
     private let intervalMenu = NSMenu()
 
@@ -57,6 +59,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Menu Building
 
     private func buildMenu() {
+        vpnToggleItem = mainMenu.addItem(
+            withTitle: "停止 VPN", action: #selector(toggleVPN), keyEquivalent: "s")
+        vpnToggleItem.target = self
+
         statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
         mainMenu.addItem(statusMenuItem)
@@ -151,6 +157,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             tint = .systemYellow
             statusText = "○ 守护进程未响应，启动中…"
             daemonTitle = "重新安装守护进程"
+        case .stopped:
+            symbolName = "antenna.radiowaves.left.and.right.slash"
+            tint = .secondaryLabelColor
+            statusText = "○ 已停止（重启电脑后自动恢复）"
+            daemonTitle = "卸载守护进程"
         case .notInstalled:
             symbolName = "antenna.radiowaves.left.and.right.slash"
             tint = .secondaryLabelColor
@@ -161,6 +172,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenuItem.title = statusText
         daemonActionItem.title = daemonTitle
         restartItem.isEnabled = status != .notInstalled
+        currentStatus = status
+        // 启停 VPN：未安装时隐藏；在跑显示「停止」，已停显示「启动」
+        switch status {
+        case .running, .noNetwork, .installedNotReachable:
+            vpnToggleItem.isHidden = false
+            vpnToggleItem.title = "停止 VPN"
+        case .stopped:
+            vpnToggleItem.isHidden = false
+            vpnToggleItem.title = "启动 VPN"
+        case .notInstalled:
+            vpnToggleItem.isHidden = true
+        }
         // Web 控制台仅在地址有效时可点
         webConsoleItem.isEnabled =
             ConfigManager.shared.center?.webConsoleUrl.isEmpty == false
@@ -176,6 +199,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard ServiceManager.shared.isDaemonInstalled() else {
             addPeerPlaceholder("(守护进程未安装)")
+            return
+        }
+        guard ServiceManager.shared.isCoreRunning() else {
+            addPeerPlaceholder("(VPN 已停止)")
             return
         }
 
@@ -198,6 +225,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         peerMenu.addItem(item)
+    }
+
+    // MARK: - VPN Start / Stop (password-free via sudoers)
+
+    @objc private func toggleVPN() {
+        guard let st = currentStatus else { return }
+        switch st {
+        case .running, .noNetwork, .installedNotReachable:
+            vpnToggleItem.isEnabled = false
+            vpnToggleItem.title = "正在停止…"
+            ServiceManager.shared.stopVPN { [weak self] ok in
+                guard let self = self else { return }
+                self.vpnToggleItem.isEnabled = true
+                if !ok {
+                    self.showAlert(title: "停止失败",
+                                   message: ServiceManager.shared.lastError ?? "未知错误")
+                }
+                self.refreshStatus()
+            }
+        case .stopped:
+            vpnToggleItem.isEnabled = false
+            vpnToggleItem.title = "正在启动…"
+            ServiceManager.shared.startVPN { [weak self] ok in
+                guard let self = self else { return }
+                self.vpnToggleItem.isEnabled = true
+                if !ok {
+                    self.showAlert(title: "启动失败",
+                                   message: ServiceManager.shared.lastError ?? "未知错误")
+                }
+                self.refreshStatus()
+            }
+        case .notInstalled:
+            break
+        }
     }
 
     // MARK: - Daemon Install / Uninstall (one-time sudo)

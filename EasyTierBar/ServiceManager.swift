@@ -20,6 +20,9 @@ class ServiceManager {
     private let daemonHome = "/Library/Application Support/EasyTierBar"
     /// daemon 持久化网络配置的目录（由 web 配置中心下发的 .toml 存于此）。
     private let configDir = "/Library/Application Support/EasyTierBar/configs"
+    /// sudoers 免密规则文件：允许当前用户免密执行对本 plist 的 launchctl load/unload，
+    /// 使日常「启动/停止 VPN」无需每次弹管理员密码（安装时随 daemon 一并写入）。
+    private let sudoersPath = "/etc/sudoers.d/easytierbar"
 
     private init() {
         cliPath = Bundle.main.path(forResource: "easytier-cli", ofType: nil)
@@ -34,6 +37,7 @@ class ServiceManager {
 
     enum DaemonStatus {
         case notInstalled
+        case stopped               // 已安装但未运行（stopVPN 后；重启电脑会自动恢复）
         case installedNotReachable
         case noNetwork      // RPC 可达但无对端 peer（core 活着，网络层未连通）
         case running
@@ -46,6 +50,8 @@ class ServiceManager {
             let status: DaemonStatus
             if !self.isDaemonInstalled() {
                 status = .notInstalled
+            } else if !self.isCoreRunningSync() {
+                status = .stopped
             } else if !self.coreReachableSync() {
                 status = .installedNotReachable
             } else {
@@ -83,6 +89,9 @@ class ServiceManager {
             return false
         }
     }
+
+    /// 进程是否在跑（供 UI 判断 stopped 展示）。pgrep 很轻量，可在主线程调用。
+    func isCoreRunning() -> Bool { isCoreRunningSync() }
 
     /// 同步检测 core 进程是否在跑（pgrep）。安装时用：core 刚启动、RPC 尚未监听，
     /// 只要进程在即视为守护进程已成功拉起。
@@ -144,8 +153,9 @@ class ServiceManager {
             return
         }
 
-        // 一次性 sudo：清掉任何手动运行的 core -> 建配置目录 -> 卸载旧的 -> 拷贝新 plist -> 加载
-        let cmd = "pkill -x easytier-core 2>/dev/null; mkdir -p '\(configDir)'; launchctl unload '\(launchdPlistPath)' 2>/dev/null; cp '\(tmpPlist)' '\(launchdPlistPath)' && launchctl load -w '\(launchdPlistPath)'"
+        // 一次性 sudo：清手动 core -> 建配置目录 -> 卸载旧的 -> 拷贝新 plist -> 加载
+        //            -> 写 sudoers 免密规则（visudo 校验通过才安装，日常启停 VPN 免密）
+        let cmd = "pkill -x easytier-core 2>/dev/null; mkdir -p '\(configDir)'; launchctl unload '\(launchdPlistPath)' 2>/dev/null; cp '\(tmpPlist)' '\(launchdPlistPath)' && launchctl load -w '\(launchdPlistPath)' && printf '%s\\n' '\(sudoersContent())' > /tmp/easytierbar.sudoers && /usr/sbin/visudo -cf /tmp/easytierbar.sudoers && cp /tmp/easytierbar.sudoers \(sudoersPath) && chmod 0440 \(sudoersPath) && rm -f /tmp/easytierbar.sudoers"
         os_log("installDaemon: cmd=%{public}@", log: log, type: .info, cmd)
         let (ok, err) = runAppleScriptSudo(command: cmd)
 
@@ -176,7 +186,7 @@ class ServiceManager {
     func uninstallDaemon(removeConfigs: Bool, completion: @escaping (Bool) -> Void = { _ in }) {
         lastError = nil
         let rmConfigs = removeConfigs ? "; rm -rf '\(configDir)'" : ""
-        let cmd = "launchctl unload '\(launchdPlistPath)' 2>/dev/null; rm -f '\(launchdPlistPath)'; pkill -x easytier-core 2>/dev/null; true\(rmConfigs)"
+        let cmd = "launchctl unload '\(launchdPlistPath)' 2>/dev/null; rm -f '\(launchdPlistPath)' \(sudoersPath); pkill -x easytier-core 2>/dev/null; true\(rmConfigs)"
         os_log("uninstallDaemon: cmd=%{public}@, removeConfigs=%{public}@", log: log, type: .info, cmd, String(removeConfigs))
         let (ok, err) = runAppleScriptSudo(command: cmd)
         if ok {
@@ -220,6 +230,75 @@ class ServiceManager {
                     self?.lastError = "守护进程重启后未响应，请检查 /tmp/easytier-core.log"
                 }
                 completion(reachable)
+            }
+        }
+    }
+
+    // MARK: - Start / Stop VPN (password-free via sudoers)
+
+    /// sudoers 免密规则内容：仅允许当前用户免密执行对本 plist 的 launchctl load/unload。
+    /// 最小授权——不能改 plist 内容、不能启停其他服务。
+    private func sudoersContent() -> String {
+        let user = NSUserName()
+        return "\(user) ALL=(root) NOPASSWD: /bin/launchctl unload \(launchdPlistPath), /bin/launchctl load \(launchdPlistPath), /bin/launchctl load -w \(launchdPlistPath)"
+    }
+
+    /// 以 sudo -n（免密）执行命令。sudoers 规则未安装时返回 false。
+    private func runSudoN(arguments: [String]) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        process.arguments = ["-n"] + arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    /// 启动 VPN：加载 LaunchDaemon。依赖安装时写入的 sudoers 免密规则，无弹窗。
+    func startVPN(completion: @escaping (Bool) -> Void = { _ in }) {
+        guard isDaemonInstalled() else {
+            lastError = "守护进程未安装"
+            completion(false)
+            return
+        }
+        lastError = nil
+        os_log("startVPN", log: log, type: .info)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let ok = self.runSudoN(arguments: ["launchctl", "load", "-w", self.launchdPlistPath])
+            guard ok else {
+                DispatchQueue.main.async {
+                    self.lastError = "免密规则未生效，请先「重新安装守护进程」一次（会写入启停免密规则）"
+                    completion(false)
+                }
+                return
+            }
+            var reachable = false
+            for _ in 0..<10 {
+                Thread.sleep(forTimeInterval: 1.0)
+                if self.coreReachableSync() { reachable = true; break }
+            }
+            DispatchQueue.main.async { completion(reachable) }
+        }
+    }
+
+    /// 停止 VPN：卸载 LaunchDaemon。临时停止——重启电脑后 daemon 会自动恢复运行。免密。
+    func stopVPN(completion: @escaping (Bool) -> Void = { _ in }) {
+        lastError = nil
+        os_log("stopVPN", log: log, type: .info)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let ok = self.runSudoN(arguments: ["launchctl", "unload", self.launchdPlistPath])
+            DispatchQueue.main.async {
+                if !ok {
+                    self.lastError = "免密规则未生效，请先「重新安装守护进程」一次（会写入启停免密规则）"
+                }
+                completion(ok)
             }
         }
     }
